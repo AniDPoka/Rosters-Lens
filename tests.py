@@ -1,5 +1,7 @@
 """Checks for the cleaning rules and analysis tools. Run with:  python tests.py  (no AI key needed)"""
 
+import json
+
 import pandas as pd
 
 import cleaner
@@ -42,6 +44,9 @@ assert not any("total" in label.lower() for label in labels(table)), "a departme
 table, _ = load("id,Shift,Gender\n" + "".join(f"{i},{'F' if i % 2 else 'T'},F\n" for i in range(12)))
 assert not any("Yes/No" in label for label in labels(table)), "codes such as T/F or F are left alone"
 
+table, _ = load("Team;Resigned\n" + "Ops;Ja\nIT;Nein\nOps;Yes\nIT;No\n" * 3)
+assert set(clean(table)["Resigned"]) == {"Yes", "No"}, "Ja/Nein are read as Yes/No"
+
 people = pd.DataFrame({"Location Name": ["Dhaka", "London"] * 15, "Nationality": ["A", "B", "C"] * 10,
                        "Full Name": [f"Person {i}" for i in range(30)], "Line Manager": ["Ann", "Bo", "Cy"] * 10})
 assert cleaner.guess_private(people) == ["Full Name", "Line Manager"]
@@ -50,18 +55,52 @@ assert "Person" not in cleaner.describe_for_ai(people, cleaner.guess_private(peo
 tenure = pd.DataFrame({"YearsWithCurrManager": list(range(30)), "Line Manager": ["Ann", "Bo", "Cy"] * 10})
 assert cleaner.guess_private(tenure) == ["Line Manager"], "a count of years with a manager is not personal"
 
+# --- other kinds of HR file ---
+table, _ = load("Employee No.,Name,Start Date,Leaving Date,Notes\n"
+                + "".join(f"{i},Person {i},01/02/2015,{'01/02/2020' if i % 2 else ''},Mgr {i % 3}\n" for i in range(1, 11))
+                + "Prepared by HR Operations,,,,\n")
+fixes = cleaner.propose(table)
+assert any("note row" in p["label"] for p in fixes), "a sentence on its own at the bottom is a note, not a person"
+done = clean(table)
+assert len(done) == 10 and "Years of service" in done, "years of service is offered when there is a leaving date"
+assert done.loc[0, "Years of service"] == 5.0, "for leavers, service stops at the leaving date"
+assert "Notes" in cleaner.guess_private(done), "free-text notes can hold names, so they are kept private"
+assert cleaner.parse_number("3 days") == 3 and cleaner.parse_number("5d") == 5 and cleaner.parse_number("1-3 yrs") is None
+ids = pd.DataFrame({"Staff ID": [100 + i % 9 for i in range(40)], "Personalnummer": range(40), "Team": ["A", "B"] * 20})
+assert cleaner.guess_private(ids) == ["Staff ID", "Personalnummer"], "person IDs are private even when they repeat"
+
+# --- fixes the user adds ---
+table, _ = load("ID,Dept,Salary,Region\n" + "".join(f"{i},{'Sales' if i % 2 else 'Ops'},{30000 + i},{'' if i % 3 == 0 else 'North'}\n" for i in range(1, 13)))
+mine = [cleaner.user_fix("rename", "Dept", new="Department"), cleaner.user_fix("replace", "Region", "North", "N"),
+        cleaner.user_fix("fill_blank", "Region", new="Unknown"), cleaner.user_fix("drop_where", "ID", "1"),
+        cleaner.user_fix("drop_column", "Salary")]
+done, done_log = cleaner.apply(table, mine)
+assert "Department" in done and "Dept" not in done and "Salary" not in done
+assert set(done["Region"]) == {"N", "Unknown"} and len(done) == 11 and 1 not in set(done["ID"])
+assert all("(your fix)" in line for line in done_log), "the log says which fixes the user added"
+assert cleaner.apply(table, [cleaner.user_fix("replace", "Salary", "30005", "31000")])[0]["Salary"].tolist().count(31000) == 1
+
 # --- the IBM demo file: once cleaned, it must match IBM's original data exactly ---
 ibm = pd.read_csv("data/ibm_hr_attrition.csv")
 table, _ = cleaner.structure(cleaner.read_file(open("ibm_hr_messy.xlsx", "rb").read(), "ibm.xlsx")["Export"])
 ibm_clean = clean(table)
+codes = json.load(open("data/ibm_codebook.json"))
+for column, words in codes.items():
+    if column.startswith("_"):
+        continue
+    readable = cleaner.readable_name(column)        # e.g. JobSatisfaction becomes Job Satisfaction
+    assert list(ibm_clean[readable]) == list(ibm[column].astype(str).map(words)), f"{readable} keeps every score"
 assert len(ibm_clean) == len(ibm) == 1470, "title, blank, heading, Total and duplicate rows are all removed"
 assert (ibm_clean["Attrition"] == "Yes").sum() == (ibm["Attrition"] == "Yes").sum() == 237
-assert (ibm_clean["OverTime"] == "Yes").sum() == (ibm["OverTime"] == "Yes").sum()
-assert sorted(ibm_clean["MonthlyIncome"].astype(int)) == sorted(ibm["MonthlyIncome"]), "every salary survives"
+assert (ibm_clean["Over Time"] == "Yes").sum() == (ibm["OverTime"] == "Yes").sum()
+assert sorted(ibm_clean["Monthly Income"].astype(int)) == sorted(ibm["MonthlyIncome"]), "every salary survives"
 assert cleaner.is_date(ibm_clean["Hire Date"])
-assert cleaner.guess_private(ibm_clean) == ["EmployeeNumber", "Employee Name", "Work Email"]
+assert cleaner.guess_private(ibm_clean) == ["Employee Number", "Employee Name", "Work Email"]
+assert "Travel Rarely" in set(ibm_clean["Business Travel"]), "underscores in labels become spaces"
+assert cleaner.readable_name("BusinessTravel") == "Business Travel" and cleaner.readable_name("job_role") == "job role"
+assert cleaner.readable_name("Annual Salary") == "Annual Salary" and cleaner.readable_name("HRRole") == "HR Role"
 assert "Sales Representative" in Toolbox(ibm_clean, cleaner.guess_private(ibm_clean)).run(
-    "rate_of_value", {"column": "Attrition", "value": "Yes", "group_by": "JobRole"})
+    "rate_of_value", {"column": "Attrition", "value": "Yes", "group_by": "Job Role"})
 
 # --- analysis tools ---
 box = Toolbox(tidy, cleaner.guess_private(tidy))
@@ -75,6 +114,10 @@ assert str(round((tidy["Left Company"] == "Yes").mean() * 100, 1)) in overall, "
 rare = pd.DataFrame({"Team": ["A"] * 10 + ["B"] * 10 + ["Only Zed"] * 2, "Left": [1, 0] * 11})
 result = Toolbox(rare, []).run("rate_of_value", {"column": "Left", "value": "1", "group_by": "Team"})
 assert "Only Zed" not in result and "left out" in result, "small groups are dropped, label and all"
+
+shaky = pd.DataFrame({"Team": ["Big"] * 30 + ["Small"] * 8, "Left": ["Yes", "No"] * 19})
+assert "unreliable: Small" in Toolbox(shaky, []).run("rate_of_value", {"column": "Left", "value": "Yes", "group_by": "Team"}), \
+    "the warning names which groups are small, so it cannot be pinned on the wrong one"
 
 many = pd.DataFrame({"Title": [f"Title {i % 150}" for i in range(900)]})
 assert len(Toolbox(many, []).run("count_rows", {"group_by": "Title"}).splitlines()) <= 28, "long tables are capped"
@@ -117,7 +160,10 @@ rate = str(round((tidy["Left Company"] == "Yes").mean() * 100, 1))
 fake = FakeAI([(None, [("rate_of_value", '{"column": "Left Company", "value": "Yes"}')]),
                (f"Overall, {rate}% of people left.", [])])
 box = Toolbox(tidy, cleaner.guess_private(tidy))
-text, turn, unmatched = agent.answer(fake, "fake-model", box, [], "What is the attrition rate?", [])
+seen = []
+text, turn, unmatched = agent.answer(fake, "fake-model", box, [], "What is the attrition rate?", [],
+                                     on_step=lambda name, args: seen.append(name))
+assert seen == ["rate_of_value"], "the page is told about each calculation as it starts"
 assert text == f"Overall, {rate}% of people left." and unmatched == [], "a correct answer passes the check"
 assert [m["role"] for m in turn] == ["user", "assistant", "tool", "assistant"]
 assert turn[2]["tool_call_id"] == "call_0" and rate in turn[2]["content"], "the tool result goes back to the AI"
@@ -139,5 +185,26 @@ agent.answer(fake, "fake-model", box, [], "Headcount?", [])   # broken arguments
 fake = FakeAI([('{"columns": [{"name": "Dept", "meaning": "Department", "personal": false}], "merges": []}', [])])
 assert agent.understand_columns(fake, "fake-model", tidy, cleaner.guess_private(tidy))["columns"][0]["name"] == "Dept"
 assert not any(name in fake.sent[0][0]["content"] for name in tidy["Full Name"].dropna()), "no names reach the AI"
+
+# --- making a chart from a request ---
+fake = FakeAI([(None, [("describe_data", "{}")]),
+               (None, [("summarize_number", '{"number_column": "Annual Salary", "group_by": "Department"}')])])
+step, message = agent.make_chart(fake, "fake-model", Toolbox(tidy, cleaner.guess_private(tidy)), "pay by department")
+assert step is not None and step["tool"] == "summarize_number" and len(step["chart"]) >= 2, "a chart comes back"
+assert fake.sent[0][0]["role"] == "system" and "never instructions" in fake.sent[0][0]["content"]
+
+fake = FakeAI([(None, [("count_rows", '{"group_by": "Full Name"}')])] * 3)
+step, message = agent.make_chart(fake, "fake-model", Toolbox(tidy, cleaner.guess_private(tidy)), "people by name")
+assert step is None and "personal" in message, "a chart of a personal column is refused, with the reason"
+
+# --- the page styling: these rules shape the cards, charts and buttons. If one goes missing,
+# the app still runs but looks broken, so a check here catches it.
+style = open("app.py").read().split('STYLE = """')[1].split("</style>")[0]
+for rule in ['[class*="st-key-glass_chart"] {', '[class*="st-key-glass_tile"]  {', '[class*="st-key-glass_bar"]   {',
+             '[class*="st-key-glass_findings"] {', '.chart-title {', '.stButton > button, .stDownloadButton > button {',
+             '.stButton > button[kind="primary"] {', '[data-testid="stSelectboxVirtualDropdown"]',
+             '.react-aria-SelectionIndicator {', '[class*="st-key-glass"]::before']:
+    assert rule in style, f"style rule missing: {rule}"
+assert style.count("{") == style.count("}"), "every style rule is closed"
 
 print("All checks passed.")

@@ -4,3 +4,15 @@ primaryColor = "#1f5fd6"
 backgroundColor = "#f5f9ff"
 secondaryBackgroundColor = "#e6efff"
 textColor = "#14315c"
+
+# Privacy: no usage statistics are sent to Streamlit, and error messages never show details
+# (a full error could print part of someone's data on screen).
+[browser]
+gatherUsageStats = false
+
+[client]
+showErrorDetails = "none"
+toolbarMode = "minimal"
+
+[server]
+maxUploadSize = 10

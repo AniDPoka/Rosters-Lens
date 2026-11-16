@@ -1,4 +1,4 @@
-# HR Data Agent
+# Roster Lens
 
 Upload an HR spreadsheet, even a messy one. The agent cleans it, shows every change for approval, and then answers questions about it in plain English.
 
@@ -22,7 +22,7 @@ Upload an HR spreadsheet, even a messy one. The agent cleans it, shows every cha
 **Charts and dashboard**
 - Answers that compare groups come with a chart: bars for comparisons, a line for trends over time. Each chart can be downloaded as a picture.
 - A dashboard view builds itself from the cleaned data: headline numbers, headcount, outcome rate and averages by a chosen category, people per year, and the factors most linked to the chosen outcome. It uses no AI calls.
-- Any chart from an answer can be pinned to the dashboard.
+- Any chart from an answer can be pinned to the dashboard, and the "Add any chart" box makes a new chart from a plain request such as "average income by gender". The AI only chooses the calculation; pandas does it, with the same privacy rules.
 - The interface uses a frosted-glass style in blue and white. The colours are set in `.streamlit/config.toml` and the styling is at the top of `app.py`.
 
 ## Design choices
@@ -39,9 +39,10 @@ Upload an HR spreadsheet, even a messy one. The agent cleans it, shows every cha
 
 - Works on Excel and CSV files containing one table per sheet. Heavily formatted reports with merged cells or several tables on one sheet may not be understood.
 - The AI runs on Groq's free tier. Groq states that it does not train on what is sent, but the data still leaves the app, so use the public demo only with sample or non-confidential files. The free tier also has daily limits, so the demo may pause when they are used up.
+- Uploaded files are never saved or shared: they stay in the visitor's own browser session and are gone when the page closes. The app sends no usage statistics.
 - AI answers can be wrong. Check the "How I got this" panel before relying on a figure.
 - Rates and averages for small groups are unreliable, and the small-group rule reduces but does not remove the chance of working out something about an individual by combining several questions.
-- "Years since" columns count up to today, so for people who have left they are not length of service.
+- Without a leaving-date column, "Years since" columns count up to today, so for people who have left they are not length of service. With one, a "Years of service" column is offered that stops at the leaving date.
 - The demo data is fictional (see below). Hire Date, Employee Name and Work Email were added for the demo.
 
 ## Demo data
@@ -80,4 +81,4 @@ Research Directors), and people who work overtime leave at 30.5% against 10.4% f
 
 ## Built with
 
-Python, Streamlit, Groq API (tool calling and JSON output, open-weight models), pandas, matplotlib
+Python, Streamlit, Groq API (tool calling and JSON output, open-weight models), pandas, Altair

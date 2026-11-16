@@ -108,8 +108,10 @@ class Toolbox:
         if is_number(series) and series.nunique() > 8:
             ranges = pd.qcut(series, 4, duplicates="drop")
             lowest = series.min()
+            # tidy edges: "4,976 to 5,993" for big numbers, "6.2 to 9.7" for small ones
+            edge = (lambda v: f"{v:,.0f}") if series.abs().max() >= 100 else (lambda v: f"{v:.1f}".rstrip("0").rstrip("."))
             return ranges.astype(object).map(
-                lambda r: "(blank)" if pd.isna(r) else f"{max(r.left, lowest):g} to {r.right:g}")
+                lambda r: "(blank)" if pd.isna(r) else f"{edge(max(r.left, lowest))} to {edge(r.right)}")
         if is_number(series):
             return series.map(lambda v: "(blank)" if pd.isna(v) else f"{v:g}")
         return series.fillna("(blank)").astype(str)
@@ -126,9 +128,11 @@ class Toolbox:
             shown = (shown.tail(MAX_GROUPS) if keep == "last" else shown.head(MAX_GROUPS)).reset_index(drop=True)
         if shown.empty:
             raise ToolError(f"Every group has fewer than {MIN_GROUP} people, so nothing can be shown.")
-        shaky = int((shown["People"] < RELIABLE).sum())
-        if shaky and len(shown.columns) > 2:
-            note += f" {shaky} group(s) have fewer than {RELIABLE} people, so their figures are unreliable."
+        shaky = shown[shown["People"] < RELIABLE]
+        if len(shaky) and len(shown.columns) > 2:
+            # name the small groups, so the AI cannot attach the warning to the wrong one
+            names = ", ".join(str(v) for v in shaky.iloc[:, 0])
+            note += f" {len(shaky)} group(s) have fewer than {RELIABLE} people, so their figures are unreliable: {names}."
         chart = shown.set_index(shown.columns[0])[value_column] if len(shown) > 1 else None
         self.steps.append({"tool": tool, "arguments": arguments, "table": shown, "chart": chart, "kind": kind,
                            "note": note.strip()})

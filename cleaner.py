@@ -7,19 +7,24 @@ import re
 import pandas as pd
 
 MISSING = {"", "n/a", "na", "n.a.", "-", "--", "null", "nan", "?", "#n/a", "not available"}
-YES = {"y", "yes", "true"}
-NO = {"n", "no", "false"}
+# yes/no words, including common ones from exports in other languages (German, French, Spanish)
+YES = {"y", "yes", "true", "ja", "oui", "si", "sí"}
+NO = {"n", "no", "false", "nein", "non"}
 MONTHS = r"jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec"
 DATE_LIKE = re.compile(rf"(?:\d{{1,4}}[-/.]\d{{1,2}}[-/.]\d{{1,4}})|(?:{MONTHS})", re.I)
 # column names that identify a person whatever they contain
 ALWAYS_PERSONAL = re.compile(
     r"(e-?mail|phone|mobile|address|ssn|social sec|passport|national (id|ins)|\bnid\b|tax id|iban|bank"
-    r"|account (no|num)|manager|supervisor|reports to|approver)", re.I)
+    r"|account (no|num)|manager|supervisor|reports to|approver|notes?$|comments?$|remarks?$)", re.I)
+# an ID for a person, even when it repeats (e.g. one row per absence): "Staff ID", "Personalnummer"
+PERSON_ID = re.compile(r"(employee|emp|staff|personal|person|worker|candidate|applicant).*(id|no\.?|num|number|nummer|nr|#|code)$", re.I)
+# date columns that mark when someone left
+LEAVE_DATE = re.compile(r"leav|end date|exit|terminat|austritt|separation|last day", re.I)
 # words that mean a column describes a group or an amount of time, not a person
 # (e.g. "Years With Current Manager" is a count of years, not the manager's name)
 NOT_PERSONAL = re.compile(r"(job|role|team|dept|department|level|grade|band|rating|score|type|status"
                           r"|years|months|count|tenure|duration)", re.I)
-ID_NAME = re.compile(r"(id|no|num|number|code|#)\.?$", re.I)
+ID_NAME = re.compile(r"(id|no|num|number|nummer|nr|code|#)\.?$", re.I)
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 
 
@@ -97,13 +102,18 @@ def structure(raw):
         notes.append("Warning: no row of column headings was found, so the first row was used as headings. "
                      "Add a heading row to the file for reliable results.")
 
-    names, seen = [], {}
+    names, seen, renamed = [], {}, []
     for position, value in enumerate(raw.iloc[header_at]):
         name = re.sub(r"\s+", " ", str(value)).strip() if not _blank(value) else f"Column {position + 1}"
+        if readable_name(name) != name:
+            renamed.append((name, readable_name(name)))
+            name = readable_name(name)
         seen[name] = seen.get(name, 0) + 1
         names.append(name if seen[name] == 1 else f"{name} ({seen[name]})")
     body = raw.iloc[header_at + 1:].copy()
     body.columns = names
+    if renamed:
+        notes.append(f"Made {len(renamed)} column name(s) easier to read, e.g. '{renamed[0][0]}' → '{renamed[0][1]}'.")
 
     repeated = body.apply(lambda row: [str(v).strip() for v in row] == [str(v).strip() for v in raw.iloc[header_at]], axis=1)
     if len(body) and repeated.any():
@@ -153,6 +163,15 @@ def structure(raw):
     return body, notes
 
 
+def readable_name(name):
+    """'BusinessTravel' → 'Business Travel', 'job_role' → 'job role'. Names that already have spaces stay as they are."""
+    if " " in name:
+        return name
+    name = name.replace("_", " ")
+    name = re.sub(r"(?<=[a-z])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])", " ", name)   # split joined-up words
+    return re.sub(r"\s+", " ", name).strip()
+
+
 def _plain_number(value):
     if isinstance(value, bool):
         return False
@@ -166,6 +185,7 @@ def _plain_number(value):
 def parse_number(value, dot_thousands=False):
     """'$52,000', '52k', '12%', '(300)', '45.000,50' -> a number. Returns None if it is not a number."""
     text = re.sub(r"(usd|eur|gbp|inr|aed|cad|aud|sgd|rs\.?|[$£€₹%\s])", "", str(value).lower())
+    text = re.sub(r"(?<=\d)(days?|d|hours?|hrs?|h|weeks?|wks?|w|months?|mos?|years?|yrs?|y)$", "", text)  # "3 days" -> 3
     if "," in text and "." in text:
         # whichever comes last is the decimal mark: 1,234.5 or 1.234,5
         if text.rfind(",") > text.rfind("."):
@@ -231,6 +251,16 @@ def propose(table):
         add("drop_rows", f"Remove {len(total_rows)} total/summary row(s)",
             "Rows such as 'Total' or 'Average' would be counted as if they were people.", payload=total_rows)
 
+    # note rows: a single sentence such as "Prepared by HR Operations" with every other cell empty
+    filled = table.notna().sum(axis=1)
+    note_rows = [i for i in table.index if filled[i] == 1 and i not in total_rows
+                 and any(isinstance(v, str) and len(v.split()) >= 3 for v in table.loc[i].dropna())]
+    if note_rows:
+        add("drop_rows", f"Remove {len(note_rows)} note row(s)",
+            f"Rows that hold only a sentence, such as {_examples([table.loc[i].dropna().iloc[0] for i in note_rows], 1)}, "
+            "are notes, not people.", payload=note_rows)
+        total_rows = total_rows + note_rows
+
     duplicates = int(table.drop(index=total_rows).duplicated().sum())
     if duplicates:
         # Without an ID-like column, two identical rows can be two different people
@@ -243,12 +273,26 @@ def propose(table):
                 "This file has no ID or name column, so identical rows may be separate people who share the "
                 "same details. Tick only if you know they are copies.", default=False)
 
+    def add_years(col):
+        """Offers a length-of-time column for a date, e.g. years of service from a start date."""
+        if LEAVE_DATE.search(col):
+            return   # "years since someone left" is rarely useful, so it is not offered
+        leave = next((c for c in table.columns if c != col and LEAVE_DATE.search(c)), None)
+        if leave:
+            add("years_since", "Add a 'Years of service' column",
+                f"From '{col}' to '{leave}' for people who have left, and to today for everyone else.",
+                column=col, payload=leave)
+        else:
+            useful = bool(re.search(r"start|hire|join|birth|dob|eintritt|since", col, re.I))   # e.g. tenure, age
+            add("years_since", f"Add a 'Years since {col}' column",
+                "Useful for tenure or age. Counted up to today, so for people who have left it is not their "
+                "length of service.", column=col, default=useful)
+
     for col in table.columns:
         series = table[col]
         if not is_text(series):
             if is_date(series):
-                add("years_since", f"Add a 'Years since {col}' column",
-                    "Useful for tenure or age. Counted up to today, so for people who have left it is not their length of service.", column=col)
+                add_years(col)
             continue
         present = series.dropna().astype(str)
         if present.empty:
@@ -281,8 +325,7 @@ def propose(table):
                 if len(unreadable):
                     detail += f" {len(unreadable)} value(s) could not be read and will be blank, e.g. {_examples(unreadable, 2)}."
                 add("to_date", f"'{col}': convert text to dates", detail, column=col)
-                add("years_since", f"Add a 'Years since {col}' column",
-                    "Useful for tenure or age. Counted up to today, so for people who have left it is not their length of service.", column=col)
+                add_years(col)
                 continue
 
         if present.nunique() <= 60:
@@ -293,6 +336,11 @@ def propose(table):
                 shown = "; ".join(f"'{old}' → '{new}'" for old, new in list(mapping.items())[:3])
                 add("merge", f"'{col}': fix inconsistent capital letters ({int((variants > 1).sum())} label(s))",
                     shown, column=col, payload=mapping)
+            # labels such as 'Travel_Rarely' read better as 'Travel Rarely'
+            joined = {v: v.replace("_", " ").strip() for v in set(present) | set(groups.values) if "_" in v}
+            if joined and not any("@" in v for v in joined):
+                add("merge", f"'{col}': replace underscores with spaces",
+                    "; ".join(f"'{old}' → '{new}'" for old, new in list(joined.items())[:3]), column=col, payload=joined)
     return proposals
 
 
@@ -307,6 +355,37 @@ def merge_proposal(table, column, canonical, variants):
     return {"kind": "merge", "label": f"'{column}': treat {_examples(sorted(mapping), 4)} as '{canonical}'",
             "detail": "Suggested by the AI because these labels look like the same thing. Untick if they are different.",
             "column": column, "payload": mapping, "source": "ai", "default": True}
+
+
+USER_FIXES = {
+    "rename": "Rename a column",
+    "replace": "Replace a value",
+    "fill_blank": "Fill blank cells",
+    "drop_column": "Remove a column",
+    "drop_where": "Remove rows with a value",
+}
+
+
+def user_fix(kind, column, old="", new=""):
+    """Builds a fix the user asked for, in the same shape as the suggested ones, so it can be ticked or not."""
+    labels = {
+        "rename": f"Rename '{column}' to '{new}'",
+        "replace": f"'{column}': replace '{old}' with '{new}'",
+        "fill_blank": f"'{column}': fill blank cells with '{new}'",
+        "drop_column": f"Remove the column '{column}'",
+        "drop_where": f"Remove rows where '{column}' is '{old}'",
+    }
+    detail = "Added by you." + (" Removing rows removes those people from every result." if kind == "drop_where" else "")
+    return {"kind": kind, "label": labels[kind], "detail": detail, "column": column,
+            "payload": {"old": str(old), "new": str(new)}, "source": "user", "default": True}
+
+
+def _same_type(series, text):
+    """'45000' becomes a number in a number column, so a typed value fits the column it goes into."""
+    if is_number(series):
+        number = parse_number(text)
+        return number if number is not None else text
+    return text
 
 
 def apply(table, proposals):
@@ -330,12 +409,31 @@ def apply(table, proposals):
             if not is_text(table[col]):
                 continue
             table[col] = table[col].map(lambda v: p["payload"].get(v, v)).astype(object)
+        elif p["kind"] in USER_FIXES:
+            if col not in table:
+                continue
+            old, new = p["payload"]["old"], p["payload"]["new"]
+            if p["kind"] == "rename" and new.strip():
+                table = table.rename(columns={col: new.strip()})
+            elif p["kind"] == "replace":
+                table[col] = table[col].map(lambda v: _same_type(table[col], new) if str(v) == old or
+                                            (is_number(table[col]) and parse_number(old) == v) else v)
+            elif p["kind"] == "fill_blank":
+                table[col] = table[col].where(table[col].notna(), _same_type(table[col], new))
+            elif p["kind"] == "drop_column":
+                table = table.drop(columns=[col])
+            elif p["kind"] == "drop_where":
+                table = table[table[col].astype(str) != old]
         elif p["kind"] == "years_since":
             if not is_date(table[col]):
                 continue
-            years = (pd.Timestamp.today().normalize() - table[col]).dt.days / 365.25
-            table[f"Years since {col}"] = years.round(1)
-        log.append(p["label"] + ("" if p["source"] == "rule" else " (AI suggestion)"))
+            end, name = pd.Series(pd.Timestamp.today().normalize(), index=table.index), f"Years since {col}"
+            leave = p.get("payload")
+            if leave and leave in table:   # stop counting at the leaving date for people who have left
+                left = table[leave] if is_date(table[leave]) else _parse_dates(table[leave])[0]
+                end, name = left.fillna(end), "Years of service"
+            table[name] = ((end - table[col]).dt.days / 365.25).round(1)
+        log.append(p["label"] + {"rule": "", "ai": " (AI suggestion)", "user": " (your fix)"}[p["source"]])
     return table.reset_index(drop=True), log
 
 
@@ -354,6 +452,8 @@ def guess_private(table):
             private.append(col)
         elif re.search(r"name", col, re.I) and not NOT_PERSONAL.search(col) and unique_share > 0.5:
             private.append(col)                    # "Full Name" yes, "Location Name" no
+        elif PERSON_ID.search(col) and series.nunique() >= 8:
+            private.append(col)                    # repeats are fine: it still points at one person
         elif ID_NAME.search(col) and unique_share > 0.9:
             private.append(col)
         elif series.astype(str).str.contains(EMAIL).mean() > 0.5:

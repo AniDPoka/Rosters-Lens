@@ -4,16 +4,20 @@ Real HR exports are rarely clean, so this script adds the kinds of mess the app 
 title rows, blank rows, a repeated heading, a Total row, duplicated rows, placeholders like 'N/A',
 money written as text, Yes/No written five ways, and the same department spelled differently.
 
+Survey scores such as JobSatisfaction are stored by IBM as codes 1 to 4. A real HR export would show
+the words, so they are written out using IBM's codebook (data/ibm_codebook.json), e.g. 1 = Low.
+
 It also adds three columns that IBM's file does not have, so the demo shows more features:
 - Employee Name and Work Email: made-up values, to show that personal columns are withheld.
 - Hire Date: worked out from YearsAtCompany, so 'hires per year' can be shown.
 
 The mess is chosen so that nothing real is lost: once the app's fixes are approved, every IBM figure
-(1,470 people, 237 leavers, every salary) comes back exactly. tests.py checks this.
+(1,470 people, 237 leavers, every salary and score) comes back exactly. tests.py checks this.
 
 Run from the project folder:  .venv/bin/python data/make_messy_sample.py
 """
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -74,6 +78,10 @@ over18[some(0.03)] = "N/A"
 over18[some(0.02)] = "-"
 
 table = people.copy()
+codebook = json.loads((HERE / "ibm_codebook.json").read_text())
+for column, words in codebook.items():
+    if column in table:
+        table[column] = table[column].astype(str).map(words)    # 1 → "Low", 4 → "Very High"
 table["MonthlyIncome"], table["Department"], table["Over18"] = income, department, over18
 table["Attrition"], table["OverTime"] = messy_yes_no("Attrition"), messy_yes_no("OverTime")
 table.insert(1, "Employee Name", names)
