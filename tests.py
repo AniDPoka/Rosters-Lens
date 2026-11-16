@@ -207,4 +207,24 @@ for rule in ['[class*="st-key-glass_chart"] {', '[class*="st-key-glass_tile"]  {
     assert rule in style, f"style rule missing: {rule}"
 assert style.count("{") == style.count("}"), "every style rule is closed"
 
+# --- the whole app, run without a browser: remembered results must stay correct ---
+from streamlit.testing.v1 import AppTest
+
+app = AppTest.from_file("app.py", default_timeout=120)
+for name, value in {"source": "sample", "file_bytes": open("ibm_hr_messy.xlsx", "rb").read(),
+                    "file_name": "ibm_hr_messy.xlsx", "file_label": "Sample"}.items():
+    app.session_state[name] = value
+app.run()
+[b for b in app.button if "Apply" in b.label][0].click().run()
+headline = lambda: [m.value for m in app.metric][:2]
+department = lambda: [s for s in app.selectbox if s.label == "Department"][0]
+everyone = headline()
+department().set_value("Sales").run()
+sales = headline()
+department().set_value("All").run()
+assert headline() == everyone and everyone == ["1,470", "16.1%"], "a remembered result is the same as a fresh one"
+department().set_value("Sales").run()
+assert headline() == sales == ["446", "20.6%"]
+assert not app.exception, "the app runs without errors"
+
 print("All checks passed.")

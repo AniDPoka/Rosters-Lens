@@ -128,6 +128,10 @@ The look is "liquid glass": frosted translucent panels over a soft blue backgrou
   their own `st.empty()` slot, and the other slot is emptied first. One shared slot let the old screen
   linger next to the new one. Buttons that change screens use `on_click` callbacks, so a click causes
   one redraw, not two. Streamlit's grey-out of old content during a redraw is turned off in `STYLE`.
+- Speed: the live server is small, so work is never redone on a click. `remembered()` is a per-visitor store
+  in `st.session_state` (allowed under rule 9, unlike `st.cache_data`). It holds the read file and every
+  dashboard result from `tool_table(box, "tool_name", *args, **options)`, keyed by `data_version`, which goes
+  up on each Apply and empties the store. `tests.py` checks a remembered result equals a fresh one.
 - When editing `STYLE`, never replace a whole stretch "from one comment to another": that once deleted the
   card, chart and button rules. `tests.py` now checks the key rules are present.
 - Anything that leaves a `transform`, `filter` or `backdrop-filter` on a panel breaks full screen (the

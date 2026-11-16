@@ -16,3 +16,5 @@ toolbarMode = "minimal"
 
 [server]
 maxUploadSize = 10
+# smaller messages between the server and the browser, so the live app feels quicker on slow connections
+enableWebsocketCompression = true

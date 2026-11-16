@@ -547,13 +547,35 @@ def first_match(columns, words, default=0):
     return next((i for i, c in enumerate(columns) if re.search(words, c, re.I)), default)
 
 
-def tool_table(box, run):
-    """Runs one analysis tool and returns its table, or None if the privacy rules or the data stop it."""
-    try:
-        run()
-    except ToolError:
-        return None
-    return box.steps[-1]["table"]
+def remembered():
+    """This visitor's store of results already worked out. It lives in their own session (never shared
+    with other visitors) and is emptied when the data changes."""
+    store = state.setdefault("remembered", {})
+    if len(store) > 400:          # keep it small
+        store.clear()
+    return store
+
+
+def tool_table(box, tool, *args, **options):
+    """Runs one analysis tool and returns its table, or None if the privacy rules or the data stop it.
+
+    The result is remembered, keyed by the tool and its inputs, so a redraw or moving a filter back does
+    not work the same thing out again. That is what keeps the live app quick on a small server.
+    """
+    store = remembered()
+    key = (state.get("data_version"), tool, args, tuple(sorted(options.items())))
+    if key in store:
+        step = store[key]
+        if step is not None:
+            box.steps.append(step)     # so the chart notes still find it
+    else:
+        try:
+            getattr(box, tool)(*args, **options)
+            step = box.steps[-1]
+        except ToolError:
+            step = None
+        store[key] = step
+    return None if step is None else step["table"]
 
 
 def money_like(column):
@@ -590,9 +612,9 @@ def show_dashboard(table, private, meanings):
     xc, xv = extra or (None, None)
 
     # --- headline numbers, compared with the whole company when one team is chosen ---
-    def headline(run, everyone):
-        here = tool_table(box, run)
-        whole = tool_table(box, everyone) if where else None
+    def headline(tool, *args):
+        here = tool_table(box, tool, *args, filters=where)
+        whole = tool_table(box, tool, *args) if where else None
         value = None if here is None else float(here.iloc[0, -1])
         gap = None if whole is None or value is None else value - float(whole.iloc[0, -1])
         return value, gap
@@ -602,17 +624,17 @@ def show_dashboard(table, private, meanings):
     tiles = [("People", f"{len(filtered):,}", share, "off", "of all")]
     rate = None
     if outcome:
-        rate, gap = headline(lambda: box.rate_of_value(oc, ov, filters=where), lambda: box.rate_of_value(oc, ov))
+        rate, gap = headline("rate_of_value", oc, ov)
         if rate is not None:   # for attrition, higher is worse, so a rise shows in red
             tiles.append((rate_name(oc, ov), f"{rate:.1f}%", None if gap is None else f"{gap:+.1f} pts", "inverse", "vs all"))
     for column in dict.fromkeys(c for c in (measure, tenure) if c):     # pay, then years at the company
-        value, gap = headline(lambda: box.summarize_number(column, filters=where), lambda: box.summarize_number(column))
+        value, gap = headline("summarize_number", column)
         if value is not None:
             big = abs(value) >= 100
             tiles.append((f"Avg {column}", f"{value:,.0f}" if big else f"{value:,.1f}",
                           None if gap is None else (f"{gap:+,.0f}" if big else f"{gap:+.1f}"), "normal", "vs all"))
     if extra:
-        value, gap = headline(lambda: box.rate_of_value(xc, xv, filters=where), lambda: box.rate_of_value(xc, xv))
+        value, gap = headline("rate_of_value", xc, xv)
         if value is not None:
             tiles.append((rate_name(xc, xv), f"{value:.1f}%", None if gap is None else f"{gap:+.1f} pts", "off", "vs all"))
     row = st.container(horizontal=True, wrap=True)          # cards move to a second row on narrow screens
@@ -622,16 +644,16 @@ def show_dashboard(table, private, meanings):
             delta_description=against if delta else None)
 
     # --- the calculations behind the charts and the key findings ---
-    by_rate = tool_table(box, lambda: box.rate_of_value(oc, ov, group_by=compare, filters=where)) if outcome else None
-    by_count = tool_table(box, lambda: box.count_rows(group_by=compare, filters=where))
-    by_measure = tool_table(box, lambda: box.summarize_number(measure, group_by=compare, filters=where)) if measure else None
-    drivers = tool_table(box, lambda: box.find_drivers(oc, ov, filters=where)) if outcome else None
-    by_flag = tool_table(box, lambda: box.rate_of_value(oc, ov, group_by=xc, filters=where)) if outcome and extra and xv == "Yes" else None
+    by_rate = tool_table(box, "rate_of_value", oc, ov, group_by=compare, filters=where) if outcome else None
+    by_count = tool_table(box, "count_rows", group_by=compare, filters=where)
+    by_measure = tool_table(box, "summarize_number", measure, group_by=compare, filters=where) if measure else None
+    drivers = tool_table(box, "find_drivers", oc, ov, filters=where) if outcome else None
+    by_flag = tool_table(box, "rate_of_value", oc, ov, group_by=xc, filters=where) if outcome and extra and xv == "Yes" else None
     leave_col = next((d for d in dates if cleaner.LEAVE_DATE.search(d)), None)
     starts = [d for d in dates if d != leave_col]
     hire_col = next((d for d in starts if re.search(r"hire|join|start|eintritt", d, re.I)), starts[0] if starts else None)
-    hires = tool_table(box, lambda: box.trend_over_time(hire_col, filters=where)) if hire_col else None
-    leavers = tool_table(box, lambda: box.trend_over_time(leave_col, filters=where)) if leave_col else None
+    hires = tool_table(box, "trend_over_time", hire_col, filters=where) if hire_col else None
+    leavers = tool_table(box, "trend_over_time", leave_col, filters=where) if leave_col else None
     notes = {step["tool"] + str(step["arguments"].get("group_by", "")): short_note(step["note"]) for step in box.steps}
 
     findings = []
@@ -675,7 +697,7 @@ def show_dashboard(table, private, meanings):
         # the strongest links get their own charts, found automatically from the scan above
         strongest = [f for f in drivers["Factor"] if f not in (compare, team_col)][:2]
         for factor in strongest:
-            data = tool_table(box, lambda: box.rate_of_value(oc, ov, group_by=factor, filters=where))
+            data = tool_table(box, "rate_of_value", oc, ov, group_by=factor, filters=where)
             if data is not None and len(data) > 1:
                 charts.append((in_order(data), f"{rate_name(oc, ov)} by {factor}", "bar", rate,
                                f"Found automatically: one of the strongest links to {rate_name(oc, ov).lower()}."))
@@ -714,7 +736,7 @@ def in_order(data):
 # ---------- Page ----------
 
 PRIVACY_NOTE = "Your file is not saved or shared. The AI never sees names or single rows."
-KEEP_ON_NEW_FILE = {"source", "file_bytes", "file_name", "file_label", "ai", "ai_for"}
+KEEP_ON_NEW_FILE = {"source", "file_bytes", "file_name", "file_label", "ai", "ai_for", "remembered"}
 
 
 def took_upload():
@@ -803,7 +825,11 @@ page.empty()
 st.title("Roster Lens")
 file_bytes, file_name = state["file_bytes"], state["file_name"]
 try:
-    sheets = cleaner.read_file(file_bytes, file_name)
+    fingerprint = hashlib.md5(file_bytes).hexdigest()
+    store = remembered()
+    if ("sheets", fingerprint) not in store:          # read the file once, not on every click
+        store[("sheets", fingerprint)] = cleaner.read_file(file_bytes, file_name)
+    sheets = store[("sheets", fingerprint)]
 except Exception:
     st.error("That file could not be opened. Save it as .xlsx or .csv and try again.")
     st.button("Choose another file", on_click=start_over)
@@ -949,7 +975,8 @@ def apply_cleanup():
     private = [renames.get(c, c) for c in state["private_cols"] if renames.get(c, c) in clean]
     # earlier answers were worked out on the previous version of the data, so the chat starts again
     state.update(clean=clean, log=state["notes"] + log, private=private, ticked=ticked,
-                 stage="ask", chat=[], history=[], pins=[])
+                 stage="ask", chat=[], history=[], pins=[], data_version=state.get("data_version", 0) + 1)
+    remembered().clear()
 
 
 # ---------- Stage 2: dashboard and questions ----------
