@@ -39,6 +39,7 @@ Upload an HR spreadsheet, even a messy one. The agent cleans it, shows every cha
 
 - Works on Excel and CSV files containing one table per sheet. Heavily formatted reports with merged cells or several tables on one sheet may not be understood.
 - The AI runs on Groq's free tier. Groq states that it does not train on what is sent, but the data still leaves the app, so use the public demo only with sample or non-confidential files. The free tier also has daily limits, so the demo may pause when they are used up.
+- Security: text from a file is always shown as plain text, AI answers cannot contain pictures or links (so a booby-trapped file cannot make the AI send figures to another website), Excel files are opened with `defusedxml`, and AI use is capped per visit and per hour so nobody can use up the shared allowance.
 - Uploaded files are never saved or shared: they stay in the visitor's own browser session and are gone when the page closes. The app sends no usage statistics.
 - AI answers can be wrong. Check the "How I got this" panel before relying on a figure.
 - Rates and averages for small groups are unreliable, and the small-group rule reduces but does not remove the chance of working out something about an individual by combining several questions.

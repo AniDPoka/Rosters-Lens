@@ -41,7 +41,9 @@ check for it there.
   `MODELS`, the model names tried in order. No Streamlit code, so `tests.py` can test it with a fake AI.
 - `cleaner.py`: reads files, finds the table, proposes fixes, applies approved fixes, detects personal columns.
 - `tools.py`: the `Toolbox` of analysis tools the AI may call, the privacy rules, and `unverified_numbers`.
-- `tests.py`: plain `assert` checks, no test framework.
+- `safety.py`: `md_safe` (file text shown as plain text), `clean_answer` (AI answers lose pictures, links
+  and HTML), and `Allowance` (the app-wide hourly AI limit). Plain Python, tested in `tests.py`.
+- `tests.py`: plain `assert` checks, no test framework. It also runs the whole app headless (AppTest).
 - `.streamlit/config.toml`: colour theme. Required: without it some controls turn red and dark mode breaks.
 - `ibm_hr_messy.xlsx`: the demo file. IBM's HR attrition data (1,470 people) made messy on purpose.
 - `data/ibm_hr_attrition.csv`: IBM's original data, unchanged. Fictional people, made by IBM; Apache 2.0
@@ -104,7 +106,14 @@ These are the point of the project. If a requested change conflicts with one, sa
 9. **Nothing is kept, shared or tracked.** An uploaded file lives only in that visitor's
    `st.session_state` (in memory) and is gone on Start over or when the page closes. No
    `st.cache_data` / `st.cache_resource` on anything built from user data or keys (those caches are
-   shared by all visitors). `.streamlit/config.toml` turns off usage statistics and error details.
+   shared by all visitors). The only shared things are our own sample (`sample_sheets`,
+   `sample_prepared`) and the AI usage counter (numbers only). `.streamlit/config.toml` turns off usage
+   statistics and error details.
+10. **Security.** Text from a file is shown through `safe()` (`md_safe`), never as Markdown or HTML. AI
+   answers go through `clean_answer` before they are shown or kept. Every AI feature first calls
+   `ai_blocked()` (40 uses per visit, 300 per hour app-wide on the shared key). `requirements.txt` pins
+   exact versions and includes `defusedxml`, which openpyxl uses to refuse booby-trapped Excel files.
+   Uploads are capped at 10 MB, 20,000 rows and 150 columns.
 
 ## Styling
 
@@ -128,6 +137,8 @@ The look is "liquid glass": frosted translucent panels over a soft blue backgrou
   their own `st.empty()` slot, and the other slot is emptied first. One shared slot let the old screen
   linger next to the new one. Buttons that change screens use `on_click` callbacks, so a click causes
   one redraw, not two. Streamlit's grey-out of old content during a redraw is turned off in `STYLE`.
+- Charts are drawn with `st.vega_lite_chart(spec=...)` from `chart.to_dict(validate=False)`, remembered per
+  visitor: Altair's rule check was the slowest part of drawing a chart.
 - Speed: the live server is small, so work is never redone on a click. `remembered()` is a per-visitor store
   in `st.session_state` (allowed under rule 9, unlike `st.cache_data`). It holds the read file and every
   dashboard result from `tool_table(box, "tool_name", *args, **options)`, keyed by `data_version`, which goes

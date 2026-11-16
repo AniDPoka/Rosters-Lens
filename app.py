@@ -13,13 +13,17 @@ import streamlit as st
 
 import agent
 import cleaner
+from safety import Allowance, clean_answer
+from safety import md_safe as safe
 from agent import answer, make_chart, understand_columns
 from tools import MIN_GROUP, ToolError, Toolbox
 
 SAMPLE = Path(__file__).parent / "ibm_hr_messy.xlsx"   # IBM's HR data, made messy by data/make_messy_sample.py
 MAX_FILE_MB = 10
 MAX_ROWS = 20000
-MAX_QUESTIONS = 30
+MAX_COLUMNS = 150   # very wide sheets are cut, so one file cannot slow the app down for everyone
+AI_PER_VISIT = 40    # AI uses (questions, charts, suggestions) for one visit
+AI_PER_HOUR = 300    # AI uses for the whole app per hour on the shared key, so nobody can use it all up
 INK, BLUE, MUTED = "#14315c", "#1f5fd6", "#5b7299"   # the whole look uses these three colours plus white
 
 # The "liquid glass" look: soft blue light behind the page, and see-through frosted panels on top of it.
@@ -198,6 +202,9 @@ button[aria-label="Copy Vega-Lite spec"] { display: none; }
 @keyframes rl-fade-up { from { opacity: 0; translate: 0 8px; } to { opacity: 1; translate: 0 0; } }
 [data-testid="stTabs"] [role="tabpanel"] { animation: rl-fade-up 0.4s ease backwards; }
 [class*="st-key-glass"] { animation: rl-fade-up 0.45s ease backwards; }
+/* chart panels only fade (no slide): even a moving panel would trap a chart's full-screen view */
+@keyframes rl-fade { from { opacity: 0; } to { opacity: 1; } }
+[class*="st-key-glass_chart"] { animation: rl-fade 0.45s ease backwards; }
 @media (prefers-reduced-motion: reduce) {
   [data-testid="stTabs"] [role="tabpanel"], [class*="st-key-glass"], [data-baseweb="popover"] > div,
   [data-testid="stSelectboxVirtualDropdown"],
@@ -233,6 +240,22 @@ def get_secret_key():
         return st.secrets.get("GROQ_API_KEY", "")
     except Exception:
         return ""
+
+
+@st.cache_resource
+def shared_allowance():
+    """One counter for the whole app. It holds numbers only, never anyone's data."""
+    return Allowance(AI_PER_HOUR)
+
+
+def ai_blocked():
+    """Uses one AI call from the allowance. Returns a reason if there is none left, otherwise None."""
+    if state.get("ai_uses", 0) >= AI_PER_VISIT:
+        return "This visit has used its AI allowance. Click 'Start over' in the sidebar to begin a new one."
+    if not own_key.strip() and not shared_allowance().take():   # a visitor's own key is not counted
+        return "The app has used its shared AI allowance for this hour. Try again later, or add your own key in the sidebar."
+    state["ai_uses"] = state.get("ai_uses", 0) + 1
+    return None
 
 
 def connect(api_key):
@@ -408,10 +431,19 @@ def interactive_chart(series, kind, title, people=None, average=None, details=No
 
 
 def show_chart(series, kind, title, people=None, average=None, note="", details=None):
-    """Shows one chart. Its toolbar (top right, on hover) has full screen and 'Download as PNG'."""
-    st.altair_chart(interactive_chart(series, kind, title, people, average, details), theme=None, width="stretch")
+    """Shows one chart. Its toolbar (top right, on hover) has full screen and 'Download as PNG'.
+
+    The chart is built once per visitor and remembered. It is turned into its final form without Altair's
+    rule check, which is slow and not needed because these charts are always built the same way.
+    """
+    key = ("chart", kind, title, tuple(map(str, series.index)), tuple(series.values.tolist()), series.name,
+           None if people is None else tuple(people), average, None if details is None else tuple(details))
+    store = remembered()
+    if key not in store:
+        store[key] = interactive_chart(series, kind, title, people, average, details).to_dict(validate=False)
+    st.vega_lite_chart(spec=store[key], theme=None, width="stretch")
     if note:
-        st.caption(note)
+        st.caption(safe(note))
 
 
 def typed(text):
@@ -441,7 +473,7 @@ def step_words(name, arguments):
 
 def show_exchange(item, number):
     with st.chat_message("user", avatar=":material/person:"):
-        st.write(item["question"])
+        st.write(safe(item["question"]))
     with st.chat_message("assistant", avatar=":material/monitoring:"):
         st.markdown(item["answer"])
         show_answer_parts(item, number)
@@ -487,8 +519,11 @@ def show_chart_maker(table, private, meanings, scope=""):
                 request = st.text_input("Add any chart", placeholder="e.g. average income by gender, or hires per year")
                 made = st.form_submit_button("Add chart", icon=":material/add_chart:", type="primary")
         if made and request.strip():
+            blocked = None if not api_key else ai_blocked()
             if not api_key:
                 st.warning("Charts on request need an AI key. Add one under Settings in the sidebar.")
+            elif blocked:
+                st.warning(blocked)
             else:
                 try:
                     with st.spinner("Making your chart..."):
@@ -659,23 +694,23 @@ def show_dashboard(table, private, meanings):
     findings = []
     if by_rate is not None and len(by_rate) > 1 and rate:
         top = by_rate.iloc[0]
-        findings.append(f"**{top[compare]}** has the highest {rate_name(oc, ov).lower()}: **{top.iloc[-1]:.1f}%**, "
-                        f"against {rate:.1f}% across {team if where else 'the company'}.")
+        findings.append(f"**{safe(top[compare])}** has the highest {safe(rate_name(oc, ov).lower())}: **{top.iloc[-1]:.1f}%**, "
+                        f"against {rate:.1f}% across {safe(team) if where else 'the company'}.")
     if drivers is not None and len(drivers):
         first = drivers.iloc[0]
         high, low = (re.match(r"(.*) \(([\d.]+)%", first[c]) for c in ("Highest group", "Lowest group"))
         if high and low:
-            findings.append(f"**{first['Factor']}** shows the biggest gap: {high.group(1)} {high.group(2)}% vs "
-                            f"{low.group(1)} {low.group(2)}%.")
+            findings.append(f"**{safe(first['Factor'])}** shows the biggest gap: {safe(high.group(1))} {high.group(2)}% vs "
+                            f"{safe(low.group(1))} {low.group(2)}%.")
     if by_flag is not None and set(by_flag[xc]) >= {"Yes", "No"}:
         yes, no = (by_flag.set_index(xc).iloc[:, -1][v] for v in ("Yes", "No"))
-        findings.append(f"People with **{xc}**: {yes:.1f}% {rate_name(oc, ov).lower()}, against {no:.1f}% for those without.")
+        findings.append(f"People with **{safe(xc)}**: {yes:.1f}% {safe(rate_name(oc, ov).lower())}, against {no:.1f}% for those without.")
     if by_measure is not None and len(by_measure) > 1:
         high, low = by_measure.iloc[0], by_measure.iloc[-1]
         shown = (lambda v: f"{v:,.0f}") if abs(high.iloc[-1]) >= 100 else (lambda v: f"{v:,.1f}")
         if shown(high.iloc[-1]) != shown(low.iloc[-1]):          # skip it when there is no real difference
-            findings.append(f"Average {measure} ranges from {shown(low.iloc[-1])} ({low[compare]}) to "
-                            f"**{shown(high.iloc[-1])}** ({high[compare]}).")
+            findings.append(f"Average {safe(measure)} ranges from {shown(low.iloc[-1])} ({safe(low[compare])}) to "
+                            f"**{shown(high.iloc[-1])}** ({safe(high[compare])}).")
     # --- key findings, straight under the headline numbers ---
     if findings:
         with st.container(key="glass_findings"):
@@ -736,7 +771,34 @@ def in_order(data):
 # ---------- Page ----------
 
 PRIVACY_NOTE = "Your file is not saved or shared. The AI never sees names or single rows."
-KEEP_ON_NEW_FILE = {"source", "file_bytes", "file_name", "file_label", "ai", "ai_for", "remembered"}
+KEEP_ON_NEW_FILE = {"source", "file_bytes", "file_name", "file_label", "ai", "ai_for", "sheets", "sheets_for"}
+
+
+def prepare(raw):
+    """Finds the table in a sheet and works out the suggested fixes and the personal columns."""
+    base, notes = cleaner.structure(raw)
+    if len(base) > MAX_ROWS:
+        notes.append(f"The file has {len(base):,} rows. This app uses the first {MAX_ROWS:,}.")
+        base = base.head(MAX_ROWS)
+    if len(base.columns) > MAX_COLUMNS:
+        notes.append(f"The file has {len(base.columns)} columns. This app uses the first {MAX_COLUMNS}.")
+        base = base.iloc[:, :MAX_COLUMNS]
+    proposals = cleaner.propose(base)
+    preview, _ = cleaner.apply(base, [p for p in proposals if p["default"]])
+    guess = [c for c in cleaner.guess_private(preview) if c in base.columns]
+    return base, notes, proposals, guess
+
+
+# The sample is our own demo file, the same for every visitor, so it is read and prepared once for the
+# whole app. (Visitors' own files are never cached like this: rule 9 in CLAUDE.md.)
+@st.cache_data(show_spinner=False)
+def sample_sheets():
+    return cleaner.read_file(SAMPLE.read_bytes(), SAMPLE.name)
+
+
+@st.cache_data(show_spinner=False)
+def sample_prepared(sheet):
+    return prepare(sample_sheets()[sheet])
 
 
 def took_upload():
@@ -825,11 +887,13 @@ page.empty()
 st.title("Roster Lens")
 file_bytes, file_name = state["file_bytes"], state["file_name"]
 try:
-    fingerprint = hashlib.md5(file_bytes).hexdigest()
-    store = remembered()
-    if ("sheets", fingerprint) not in store:          # read the file once, not on every click
-        store[("sheets", fingerprint)] = cleaner.read_file(file_bytes, file_name)
-    sheets = store[("sheets", fingerprint)]
+    if state["source"] == "sample":
+        sheets = sample_sheets()                       # read once for the whole app
+    else:
+        fingerprint = hashlib.md5(file_bytes).hexdigest()
+        if state.get("sheets_for") != fingerprint:     # read the file once, not on every click
+            state["sheets"], state["sheets_for"] = cleaner.read_file(file_bytes, file_name), fingerprint
+        sheets = state["sheets"]
 except Exception:
     st.error("That file could not be opened. Save it as .xlsx or .csv and try again.")
     st.button("Choose another file", on_click=start_over)
@@ -857,19 +921,14 @@ if state.get("file_id") != file_id:
         del state[key]
     try:
         with st.spinner("Reading your file..."):
-            base, notes = cleaner.structure(sheets[sheet])
+            base, notes, proposals, guess = (sample_prepared(sheet) if state["source"] == "sample"
+                                             else prepare(sheets[sheet]))
     except ValueError as error:
         st.error(str(error))
         st.stop()
     except Exception:
         st.error("This sheet's layout could not be understood. It needs one table with a row of column headings.")
         st.stop()
-    if len(base) > MAX_ROWS:
-        notes.append(f"The file has {len(base):,} rows. This app uses the first {MAX_ROWS:,}.")
-        base = base.head(MAX_ROWS)
-    proposals = cleaner.propose(base)
-    preview, _ = cleaner.apply(base, [p for p in proposals if p["default"]])
-    guess = [c for c in cleaner.guess_private(preview) if c in base.columns]
     state.update(file_id=file_id, base=base, notes=notes, proposals=proposals, meanings={}, stage="clean",
                  private_guess=guess, ai_note="", ai_done=False, chat=[], history=[])
 
@@ -900,7 +959,11 @@ def show_cleanup():
         state["private_cols"] = list(state.get("private", state["private_guess"]))
 
     # The AI is asked only after the user has checked the personal columns and clicked the button
-    if state.pop("run_ai", False):
+    asked = state.pop("run_ai", False)
+    blocked = ai_blocked() if asked else None
+    if blocked:
+        state["ai_note"] = blocked
+    if asked and not blocked:
         withheld = list(state["private_cols"])
         try:
             with st.spinner("Asking the AI about the columns..."):
@@ -947,7 +1010,7 @@ def show_cleanup():
             st.write("No fixes are needed.")
         ticked = state.get("ticked", {})
         for number, proposal in enumerate(state["proposals"]):
-            label = proposal["label"] + {"ai": "  ·  AI suggestion", "user": "  ·  your fix"}.get(proposal["source"], "")
+            label = safe(proposal["label"]) + {"ai": "  ·  AI suggestion", "user": "  ·  your fix"}.get(proposal["source"], "")
             st.checkbox(label, value=ticked.get(number, proposal["default"]), key=f"fix_{number}", help=proposal["detail"])
         show_own_fix()
         if not state["ai_done"]:
@@ -958,7 +1021,7 @@ def show_cleanup():
 
     with st.expander(f"Already fixed automatically ({len(state['notes'])})"):
         for note in state["notes"] or ["Nothing needed fixing in the file's layout."]:
-            st.markdown(f"- {note}")
+            st.markdown(f"- {safe(note)}")
     with st.expander("Original file (first 12 rows)"):
         st.dataframe(sheets[sheet].head(12).astype(str), hide_index=True)
 
@@ -989,7 +1052,7 @@ def show_workspace():
         with st.popover("Data details", icon=":material/table_view:"):
             st.markdown(f"**{len(clean):,} rows, {len(clean.columns)} columns.** Changes made:")
             for line in state["log"] or ["Nothing needed cleaning."]:
-                st.markdown(f"- {line}")
+                st.markdown(f"- {safe(line)}")
             st.dataframe(column_summary(clean, private, state["meanings"]), hide_index=True)
             st.download_button("Download cleaned data (CSV)", clean.to_csv(index=False).encode("utf-8"),
                                "cleaned_data.csv", "text/csv")
@@ -1025,12 +1088,13 @@ def show_questions(clean, private):
     if not api_key:
         st.error("No AI key is set up. Add one under Settings in the sidebar.")
         return
-    if len(state["chat"]) >= MAX_QUESTIONS:
-        st.warning("This session has reached its question limit. Click 'Start over' in the sidebar.")
+    blocked = ai_blocked()
+    if blocked:
+        live.warning(blocked)
         return
     toolbox = Toolbox(clean, private, state["meanings"])
     with live.chat_message("user", avatar=":material/person:"):
-        st.write(question)
+        st.write(safe(question))
     try:
         with live.status("Thinking…", expanded=True) as progress:
             client, model = connect(api_key)
@@ -1044,6 +1108,7 @@ def show_questions(clean, private):
                    "Wait a minute and try again, or paste your own key in the sidebar.")
         return
     state["history"].append(turn)
+    text = clean_answer(text)   # no pictures or links that could send figures to another website
     # the checked answer types itself out, then its chart and details appear underneath in the same
     # message. Nothing above is redrawn, so the page does not jump.
     item = {"question": question, "answer": text, "steps": toolbox.steps, "outputs": toolbox.outputs,

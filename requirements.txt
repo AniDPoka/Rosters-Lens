@@ -1,4 +1,9 @@
+# Exact versions the app was tested with, so an update elsewhere cannot break the live app.
+# Streamlit is pinned on purpose: the styling depends on its page structure (see CLAUDE.md).
 streamlit==1.67.0
-groq
-pandas
-openpyxl
+altair==6.3.0
+groq==1.7.0
+pandas==3.1.1
+openpyxl==3.1.5
+# openpyxl uses this automatically to read Excel files safely (it blocks booby-trapped XML)
+defusedxml==0.7.1
