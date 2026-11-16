@@ -69,7 +69,8 @@ check for it there.
 6. **Dashboard** (`show_dashboard`): outcomes are (column, value) pairs (`dashboard_columns`), so a
    Yes/No column, a "Yes/No/Unsure" column, or a status column such as Active/Terminated all give a rate.
    Order: filter bar, KPI cards, Key findings, "Add any chart" with "Your charts", then ready-made charts. built from the same `Toolbox` methods. Its only AI call is the
-   optional "Add any chart" box (`show_chart_maker` → `agent.make_chart`), whose charts go in "Your charts"
+   optional "Add any chart" box (`show_chart_maker` → `agent.make_chart`). It uses the data the dashboard is
+   showing (the chosen department, if any, named in the chart's title), and its charts go in "Your charts"
    with charts pinned from answers. Dashboard and Ask questions are `st.tabs` (switching never re-runs the
    app) and each is an `@st.fragment`, so using one redraws only that tab. A
    department filter and "Compare by" choice; KPI cards that show the gap to the whole company when

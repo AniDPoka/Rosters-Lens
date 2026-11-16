@@ -475,8 +475,12 @@ def show_answer_parts(item, number):
 
 # ---------- Dashboard ----------
 
-def show_chart_maker(table, private, meanings):
-    """A box where anyone can ask for any chart. The AI picks the calculation; pandas does it."""
+def show_chart_maker(table, private, meanings, scope=""):
+    """A box where anyone can ask for any chart. The AI picks the calculation; pandas does it.
+
+    `table` is the data the dashboard is showing, so a chart made while viewing one department covers
+    only that department. `scope` (e.g. "Department: Sales") is added to the chart's title.
+    """
     with st.container(key="glass_maker"):
         with st.form("chart_request", clear_on_submit=True, border=False):
             with st.container(horizontal=True, vertical_alignment="bottom"):
@@ -497,7 +501,8 @@ def show_chart_maker(table, private, meanings):
                 else:
                     table_used = step["table"]
                     people = table_used["People"] if "People" in table_used and step["chart"].name != "People" else None
-                    state["pins"].insert(0, {"title": chart_title(step["chart"]), "chart": step["chart"],
+                    title = chart_title(step["chart"]) + (f" ({scope})" if scope else "")
+                    state["pins"].insert(0, {"title": title, "chart": step["chart"],
                                              "kind": step.get("kind", "bar"), "question": request, "people": people})
     if state["pins"]:
         st.markdown('<p class="chart-title">Your charts</p>', unsafe_allow_html=True)
@@ -657,7 +662,8 @@ def show_dashboard(table, private, meanings):
             st.caption("Patterns, not proof of causes. Groups under 5 people are hidden.")
 
     # --- "Add any chart", and the charts people made, above the ready-made ones ---
-    show_chart_maker(table, private, meanings)
+    # new charts cover what the dashboard is showing: the chosen department, or everyone
+    show_chart_maker(filtered, private, meanings, f"{team_col}: {team}" if where else "")
 
     # --- the ready-made charts, most important first ---
     charts = []
