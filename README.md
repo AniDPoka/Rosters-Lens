@@ -2,8 +2,7 @@
 
 Upload an HR spreadsheet, even a messy one. The agent cleans it, shows every change for approval, and then answers questions about it in plain English.
 
-**Live app:** 
-roster-lens.streamlit.app
+**Live app:** [roster-lens.streamlit.app](https://roster-lens.streamlit.app)
 
 ## What it does
 
