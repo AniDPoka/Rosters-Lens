@@ -18,7 +18,7 @@ import cleaner
 from agent import answer, understand_columns
 from tools import ToolError, Toolbox
 
-SAMPLE = Path(__file__).parent / "sample_messy_hr_export.xlsx"
+SAMPLE = Path(__file__).parent / "ibm_hr_messy.xlsx"   # IBM's HR data, made messy by data/make_messy_sample.py
 MAX_FILE_MB = 10
 MAX_ROWS = 20000
 MAX_QUESTIONS = 30
@@ -98,6 +98,8 @@ STYLE = """
 </style>
 """
 OUTCOME_WORDS = r"left|leav|attrit|terminat|resign|exit|churn|turnover"
+GROUP_WORDS = r"department|dept|division|team|function"      # the dashboard opens on these if present
+NUMBER_WORDS = r"salary|income|pay|wage|compensation"
 
 
 st.set_page_config(page_title="HR Data Agent", page_icon="🧹", layout="wide")
@@ -281,6 +283,11 @@ def dashboard_columns(table, private):
     return groups, flags, numbers, dates
 
 
+def first_match(columns, words):
+    """Position of the first column whose name contains one of the words, or 0 if none does."""
+    return next((i for i, c in enumerate(columns) if re.search(words, c, re.I)), 0)
+
+
 def show_dashboard(table, private, meanings):
     """An overview built from the data itself. It uses the same tools and privacy rules as the agent, and no AI."""
     groups, flags, numbers, dates = dashboard_columns(table, private)
@@ -288,11 +295,11 @@ def show_dashboard(table, private, meanings):
     group = outcome = number = None
     controls = st.container(key="glass_bar").columns(3)
     if groups:
-        group = controls[0].selectbox("Break down by", groups)
+        group = controls[0].selectbox("Break down by", groups, index=first_match(groups, GROUP_WORDS))
     if flags:
         outcome = controls[1].selectbox("Outcome to track", flags, index=flags.index((likely or flags[-1:])[0]))
     if numbers:
-        number = controls[2].selectbox("Number to average", numbers)
+        number = controls[2].selectbox("Number to average", numbers, index=first_match(numbers, NUMBER_WORDS))
 
     tiles = [("People", f"{len(table):,}")]
     if outcome:
@@ -373,8 +380,9 @@ with st.sidebar:
 
 api_key = own_key.strip() or get_secret_key()
 
-source = st.radio("Data", ["Try the messy sample file", "Upload my own file"], horizontal=True)
-if source == "Try the messy sample file":
+SAMPLE_LABEL = "Try the messy IBM sample (1,470 employees)"
+source = st.radio("Data", [SAMPLE_LABEL, "Upload my own file"], horizontal=True)
+if source == SAMPLE_LABEL:
     file_bytes, file_name = SAMPLE.read_bytes(), SAMPLE.name
 else:
     upload = st.file_uploader("Excel or CSV file", type=["xlsx", "csv", "tsv", "txt"])

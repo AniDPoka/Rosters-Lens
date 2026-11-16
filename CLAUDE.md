@@ -39,7 +39,13 @@ check for it there.
 - `tools.py`: the `Toolbox` of analysis tools the AI may call, the privacy rules, and `unverified_numbers`.
 - `tests.py`: plain `assert` checks, no test framework.
 - `.streamlit/config.toml`: colour theme. Required: without it some controls turn red and dark mode breaks.
-- `sample_messy_hr_export.xlsx`: fictional demo data (180 people after cleaning).
+- `ibm_hr_messy.xlsx`: the demo file. IBM's HR attrition data (1,470 people) made messy on purpose.
+- `data/ibm_hr_attrition.csv`: IBM's original data, unchanged. Fictional people, made by IBM; Apache 2.0
+  licence, from github.com/IBM/employee-attrition-aif360.
+- `data/make_messy_sample.py`: rebuilds `ibm_hr_messy.xlsx` (fixed seed). The mess must be lossless:
+  `tests.py` checks the cleaned file matches IBM's original exactly. Employee Name and Work Email are
+  made up; Hire Date is worked out from YearsAtCompany (export date 31 Dec 2025).
+- `data/small_test_sample.xlsx`: the older 180-person fictional file, used only by `tests.py`.
 - `requirements.txt`: Streamlit is pinned to 1.67.0 on purpose (see Styling).
 
 ## How it works

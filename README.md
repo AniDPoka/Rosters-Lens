@@ -42,7 +42,25 @@ Upload an HR spreadsheet, even a messy one. The agent cleans it, shows every cha
 - AI answers can be wrong. Check the "How I got this" panel before relying on a figure.
 - Rates and averages for small groups are unreliable, and the small-group rule reduces but does not remove the chance of working out something about an individual by combining several questions.
 - "Years since" columns count up to today, so for people who have left they are not length of service.
-- The sample file is fictional.
+- The demo data is fictional (see below). Hire Date, Employee Name and Work Email were added for the demo.
+
+## Demo data
+
+The demo uses IBM's **HR Analytics Employee Attrition** dataset: 1,470 fictional employees created by IBM data
+scientists, with 35 columns such as job role, overtime, income, satisfaction scores and whether the person left.
+It is the same dataset widely shared on Kaggle. Source: [IBM/employee-attrition-aif360](https://github.com/IBM/employee-attrition-aif360)
+(Apache License 2.0). The original file is kept unchanged in `data/ibm_hr_attrition.csv`.
+
+Real HR exports are rarely clean, so `data/make_messy_sample.py` turns it into `ibm_hr_messy.xlsx`: title rows,
+blank rows, a repeated heading, a Total row, duplicated people, salaries written as `$5,993` or `5,993 USD`,
+Yes/No written five ways, and `R&D` next to `Research & Development`. It also adds made-up names and emails
+(to show personal columns being withheld) and a hire date worked out from years at the company.
+
+The mess is chosen so nothing real is lost. After the suggested fixes are approved, the data matches IBM's
+original exactly: 1,470 people, 237 leavers (16.1%), and every salary. `tests.py` checks this.
+
+What the agent finds in it, for example: Sales Representatives leave most often (39.8%, against 2.5% for
+Research Directors), and people who work overtime leave at 30.5% against 10.4% for those who do not.
 
 ## Run it yourself
 
@@ -58,6 +76,7 @@ Upload an HR spreadsheet, even a messy one. The agent cleans it, shows every cha
 - `.streamlit/config.toml`: the colour theme
 - `tools.py`: the analysis tools the agent can call, with the privacy rules
 - `tests.py`: checks for the cleaning rules, the tools and the agent loop. Run `python tests.py` (no AI key needed)
+- `data/`: IBM's original data, the script that makes the messy demo file, and a small file used by the tests
 
 ## Built with
 

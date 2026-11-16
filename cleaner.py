@@ -15,7 +15,10 @@ DATE_LIKE = re.compile(rf"(?:\d{{1,4}}[-/.]\d{{1,2}}[-/.]\d{{1,4}})|(?:{MONTHS})
 ALWAYS_PERSONAL = re.compile(
     r"(e-?mail|phone|mobile|address|ssn|social sec|passport|national (id|ins)|\bnid\b|tax id|iban|bank"
     r"|account (no|num)|manager|supervisor|reports to|approver)", re.I)
-NOT_PERSONAL = re.compile(r"(job|role|team|dept|department|level|grade|band|rating|score|type|status)", re.I)
+# words that mean a column describes a group or an amount of time, not a person
+# (e.g. "Years With Current Manager" is a count of years, not the manager's name)
+NOT_PERSONAL = re.compile(r"(job|role|team|dept|department|level|grade|band|rating|score|type|status"
+                          r"|years|months|count|tenure|duration)", re.I)
 ID_NAME = re.compile(r"(id|no|num|number|code|#)\.?$", re.I)
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 

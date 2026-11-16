@@ -20,7 +20,7 @@ def clean(table):
 
 
 # --- cleaning ---
-sample = cleaner.read_file(open("sample_messy_hr_export.xlsx", "rb").read(), "sample.xlsx")["Export"]
+sample = cleaner.read_file(open("data/small_test_sample.xlsx", "rb").read(), "sample.xlsx")["Export"]
 table, notes = cleaner.structure(sample)
 assert any("title or note row" in n for n in notes), "title rows above the headings are skipped"
 tidy = clean(table)
@@ -46,6 +46,22 @@ people = pd.DataFrame({"Location Name": ["Dhaka", "London"] * 15, "Nationality":
                        "Full Name": [f"Person {i}" for i in range(30)], "Line Manager": ["Ann", "Bo", "Cy"] * 10})
 assert cleaner.guess_private(people) == ["Full Name", "Line Manager"]
 assert "Person" not in cleaner.describe_for_ai(people, cleaner.guess_private(people)), "personal values never reach the AI"
+
+tenure = pd.DataFrame({"YearsWithCurrManager": list(range(30)), "Line Manager": ["Ann", "Bo", "Cy"] * 10})
+assert cleaner.guess_private(tenure) == ["Line Manager"], "a count of years with a manager is not personal"
+
+# --- the IBM demo file: once cleaned, it must match IBM's original data exactly ---
+ibm = pd.read_csv("data/ibm_hr_attrition.csv")
+table, _ = cleaner.structure(cleaner.read_file(open("ibm_hr_messy.xlsx", "rb").read(), "ibm.xlsx")["Export"])
+ibm_clean = clean(table)
+assert len(ibm_clean) == len(ibm) == 1470, "title, blank, heading, Total and duplicate rows are all removed"
+assert (ibm_clean["Attrition"] == "Yes").sum() == (ibm["Attrition"] == "Yes").sum() == 237
+assert (ibm_clean["OverTime"] == "Yes").sum() == (ibm["OverTime"] == "Yes").sum()
+assert sorted(ibm_clean["MonthlyIncome"].astype(int)) == sorted(ibm["MonthlyIncome"]), "every salary survives"
+assert cleaner.is_date(ibm_clean["Hire Date"])
+assert cleaner.guess_private(ibm_clean) == ["EmployeeNumber", "Employee Name", "Work Email"]
+assert "Sales Representative" in Toolbox(ibm_clean, cleaner.guess_private(ibm_clean)).run(
+    "rate_of_value", {"column": "Attrition", "value": "Yes", "group_by": "JobRole"})
 
 # --- analysis tools ---
 box = Toolbox(tidy, cleaner.guess_private(tidy))
